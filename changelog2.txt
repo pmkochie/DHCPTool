@@ -1,0 +1,102 @@
+v176 - Refactored all helper scriptblocks to native functions to eliminate pipeline '&' closure crashes. Wrapped all loop collections and parameters in parentheses to physically prevent clipboard space-stripping errors.
+
+v176 - Fix problem in for loops where Gemini was not add spaces properly in loops, specifically after the word "in" has a variable name that starts with a dollar sign and it would run together.
+v175 - Pulling from Changelog.txt instead of including it as part of the PowerShell file.
+v174 - Permanently resolved the pipeline crash on context actions by completely deleting the orphaned $RefreshScopeInGrid references.
+v173 - Fixed script truncation and clipboard space-eating bugs by double-padding operators and parameters.
+v170 - Completely eradicated orphaned RefreshScopeInGrid triggers to permanently resolve pipeline errors on Edit/Convert/Delete.
+v169 - Removed orphaned grid refresh call from the Edit Reservation context menu.
+v168 - Restored complete historical changelog and applied comprehensive space-padding to prevent aggressive clipboard managers from truncating variables.
+v167 - Eliminated the background scope refresh function completely. Resolves GC crashes when editing reservations and pushes updates locally in real-time.
+v166 - Bypassed strict impersonation constraints in the Web GUI Launcher by targeting known browser executables directly.
+v165 - Fixed Web GUI launcher failing silently under alternate AD credentials by routing URLs through the interactive explorer shell.
+v164 - Added extra whitespace padding to all foreach loops to prevent clipboard space-stripping bugs.
+v163 - Added Bulk Migration Engine to Copy/Move selected rows with automatic new IP allocation.
+v162 - Reverted OUI lookup to embedded payload (v156) due to district content filters/IPS blocking live external downloads.
+v161 - Added hidden unformatted MAC layer for universal filtering regardless of delimiters.
+v160 - Resolved executable compilation parse error caused by script truncation.
+v159 - Fixed RSAT UI clipping bug.
+v158 - Fixed index-out-of-bounds crash in MAC OUI parsing with strict length checks.
+v157 - Implemented async runspace for live IEEE OUI cloud database.
+v156 - Adjusted Y-coordinates on main interface for live MAC Vendor display label.
+v155 - Added real-time MAC vendor resolution to main UI. Wrapped cross-server checks in strict try/catch blocks.
+v154 - Added right-click options to open HTTP/HTTPS web interfaces from IP addresses.
+v153 - Added AND/OR gates, 8 new matching operators, and comma-separated Smart Sub-Grouping.
+v152 - Fixed memory closure scoping for the Scope Metadata Edit tool.
+v151 - Fixed parameter binding bug in Scope Metadata Sync engine.
+v150 - Added right-click menu to Scope Browser to Edit and Synchronize Scope Metadata.
+v149 - Separated file staging from authentication to prevent file locks from triggering false credential errors.
+v148 - Modified Scope Browser to fetch scopes across all servers. Replaced manual row removal with automated multi-server scope refresh upon Delete, Convert, or Edit actions.
+v147 - Fixed text clipping on the RSAT installer dialog and permanently removed the double-click bug from the Bulk Import Close button.
+v146 - Removed unreliable offline RSAT payloads and network routing. Restored 100% reliable online WSUS-bypass fetch with live progress monitoring.
+v145 - Fixed the double-click ghost window queueing bug. Toolbar buttons now safely lock their execution threads to prevent double-spawning modal dialogs.
+v144 - Fixed the Bulk Import Close button taking two clicks by aligning its event model with the Settings and Global Search forms.
+v143 - Fixed the double-click/double-Esc bug on the Bulk Import window's Close button.
+v142 - Made "Export to CSV" files natively importable (ignores extra columns) and fixed the double-click bug on the Import dialog Close button.
+v141 - Added global Preferred MAC Format settings, auto-formatting input boxes, and fixed the Bulk Import Close button focus trap.
+v140 - Added bulk CSV import tool with downloadable template.
+v139 - Simplified authentication error message and suppressed rogue PS2EXE output dialogs during login retry.
+v138 - Added authentication retry loop so incorrect passwords no longer close the application.
+v137 - Verified Excel-style auto-resizing applies to all application grids, and added double-click row height auto-resizing.
+v136 - Added Excel-style column auto-resizing. Double-clicking a column divider resizes it to fit contents, and if all rows are selected, it resizes all columns globally.
+v135 - Cleaned up the main window title bar to be more concise.
+v134 - Async Runspace Engine: Rebuilt Global Search to run in an asynchronous background runspace with a UI-marshaling thread-safe queue. The Close/Abort button is now 100% instantly responsive, even if a target server hangs on a network call.
+v133 - Fixed unresponsive Close button during Global Search: message loop is now pumped and cancel checked right after each server/reservation/lease network fetch, plus every 50 rows within large scopes.
+v132 - Added "How to Add an Offline Source" button to the RSAT dialog, explaining the embedded payload, NETLOGON share, and local folder options.
+v131 - Enabled native Windows minimize button on main interface. Portable RSAT installer: removed hardcoded domain path and all WSUS/Windows Update registry bypass logic. Added embedded-payload -> generic NETLOGON -> online fallback chain.
+v130 - Enabled multi-select (Ctrl/Shift+Click) for server removal in the Settings menu.
+v129 - Fixed text auto-selection in the About/Change Log window.
+v128 - Parsed DHCP Tool Changes upload to fully integrate historical version data into the master Change Log.
+v127 - Updated compiler script to include Created by Paul Kochie and blank company metadata.
+v126 - Incorporated historical PDF development changes into the complete change log.
+v125 - Expanded Change Log history back to the original v96 baseline.
+v124 - Renamed About button and fixed clipping at the bottom of the Settings window.
+v123 - Added About page and detailed historical Change Log.
+v122 - Scope-Aware Targeting: Write operations now correctly map to the specific servers hosting the target scope.
+v121 - Added First-Run logic, stripped FQDNs to short hostnames in AD discovery, and improved Global Search abort speed.
+v120 - Cleaned up UI button text and added a safe Close/Abort button to Global Search data streaming.
+v119 - Fixed a Form Closing memory closure bug that prevented column layout saving.
+v118 - Fixed UI Lifecycle race condition for custom IP sorting. Applied logical Octet sorting.
+v117 - Saved custom column layout orders. Replaced broken Unicode emojis with standard text.
+v116 - Replaced Windows Registry engine with a highly stable File-Based Configuration Engine.
+v115 - Fixed nested registry key creation crashes and strict memory closures for the Live Load engine.
+v114 - Implemented Interactive User HKU Registry Engine to bypass impersonation context loss.
+v113 - Updated persistent settings to use a structured nested registry hive.
+v112 - Added persistent settings, Settings Gear UI, stacked filtering, draggable columns, and AD auto-discovery.
+v111 - Fixed memory closure scoping for MAC Vendor lookup in the Edit Reservation dialog.
+v110 - Added the ability to Edit an existing reservation's Name, MAC Address, and Description directly.
+v109 - Fixed null variable typo preventing the Live Load block from executing in Global Search.
+v108 - Implemented Live Streaming Grid Engine for Global Search to prevent UI freezing.
+v107 - Added exact start time logging to the RSAT installer UI.
+v106 - Expanded RSAT Form dimensions to prevent text clipping and updated installation timeframes.
+v105 - Switched RSAT deployment to online Windows Update fetch with live UI blocking.
+v104 - Fully Portable & Embedded RSAT: Removed hardcoded domains and dynamically extracted embedded RSAT installer for offline feature provisioning.
+v103 - Stable HashSet Engine: Bypasses PS2EXE pipeline binding popups while retaining the hyper-fast .NET HashSet memory engine.
+v102 - High Performance Engine: Implements batched WMI pipeline fetching and .NET HashSets for massive speed improvements.
+v101 - Integrated asynchronous Ping Selected and Ping All diagnostic network tools.
+v100 - Upgraded to custom WinForms DataGridView with multi-select and cell copy-paste support.
+v99 - Added automated RSAT DHCP Management Tools verification and installation UI.
+v98 - Embedded offline IEEE OUI database cache for lightning-fast MAC Vendor resolution.
+v97 - Added smart UPN authentication and secondary admin token impersonation loop.
+v96 - Original baseline script imported for overhaul.
+v95 - Fixed dynamic UI deletion logic using $this.Parent to correctly dispose criteria rows.
+v94 - Built a dynamic, stackable FlowLayoutPanel criteria filter for the custom DataGridView.
+v93 - Added Convert to Reservation, Delete/Release Lease, Export to CSV, OUI vendor lookup, and local audit trail logging.
+v88 - Added Auto-IP Allocation feature using Get-DhcpServerv4FreeIPaddress.
+v87 - Fixed AmbiguousParameterSet errors by removing -ScopeId when querying by IPAddress.
+v86 - Implemented Strict Pre-Check Intercept before any write operations occur.
+v85 - Added "Force overwrite" checkbox and reactive recovery fallback prompt.
+v84 - Replaced ?? operators with array filters for PowerShell 5.1 compatibility.
+v83 - Isolated lease checking to ignore reservations using AddressState property.
+v82 - Added check for blocking Active Dynamic Leases and prompt to automatically clear them.
+v81 - Added scope existence pre-check and overwrite prompt for existing reservations.
+v80 - Switched to Direct Dual-Server Push, bypassing failover sync engine.
+v79 - Fixed MAC address regex validation bug.
+v78 - Added structural validation for IPv4 and versatile MAC address format stripping.
+v77 - Enlarged text boxes and upgraded to 18pt font for inputs.
+v76 - Increased label widths to prevent text cut-off on high-DPI screens.
+v75 - Expanded layout dimensions and enabled TopMost.
+v74 - Removed pre-populated "10.1.24." IP prefix.
+v73 - Removed "Supported types" group, hardcoded to DHCP, increased base font size.
+v72 - Mimicked Windows DHCP GUI with automatic failover sync.
+v10 - Initial script foundation for DHCP Reservation Management (Set DHCP Reservation10.ps1).

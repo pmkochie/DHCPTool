@@ -2,7 +2,7 @@
 
 DHCP Tool
 
-This program is to address the fact that when you set a DHCP reservation on a Windows DHCP server, it doesn't replicate to the Failover Partner Server unless you do it manually, and when you replicate the scope manually, the entire set of reservations from the source server are sent to the destination server, and any reservation that was not on the source server will be deleted from the destination server.
+This program is to address the fact that when you set a DHCP reservation on a Windows DHCP server, it doesn't replicate to the Failover Partner Server unless you do it manually, and when you replicate the scope manually, the entire set of reservations from the source server is sent to the destination server, and any reservation that was not on the source server will be deleted from the destination server. I also included some search tools that are missing from the DHCP management tool that is part of RSAT. I only have this set to do DHCP and not BOOTP. It is only set up to work with leases and reservations, not to configure the DHCP server.
 
 There are a few files involved.
 Changelog.txt 

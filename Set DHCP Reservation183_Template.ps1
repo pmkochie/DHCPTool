@@ -1,9 +1,9 @@
 ﻿<#
 .SYNOPSIS
-    DHCP Reservation & Lease Manager (v176 - Foolproof Syntax & Native Functions).
+    DHCP Reservation & Lease Manager (v183 - Multi-Select Context Fix).
 .DESCRIPTION
     Creates DHCP reservations and views full lease/reservation tables across target DHCP servers.
-    V176: Refactored all helper scriptblocks to native functions to eliminate pipeline '&' closure crashes. Wrapped all loop collections and parameters in parentheses to physically prevent clipboard space-stripping errors.
+    V183: Fixed an issue where right-clicking to open the context menu would aggressively clear multi-row selections in the DataGridView. Right-clicking an already-selected row now safely preserves the bulk selection block.
 #>
 
 param([switch]$Authenticated)
@@ -19,7 +19,7 @@ $gridFont = New-Object System.Drawing.Font("Segoe UI", 12)
 
 if (-not $Authenticated) {
     $loginForm = New-Object System.Windows.Forms.Form
-    $loginForm.Text = "DHCP Tool (v176) — AD Admin Login"
+    $loginForm.Text = "DHCP Tool (v183) — AD Admin Login"
     $loginForm.Size = New-Object System.Drawing.Size(640, 320)
     $loginForm.StartPosition = "CenterScreen"
     $loginForm.FormBorderStyle = "FixedDialog"
@@ -538,7 +538,9 @@ function Enable-GridCopy {
     $grid.Add_CellMouseDown({
         param($s, $e)
         if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Right -and $e.RowIndex -ge 0) {
-            $s.CurrentCell = $s.Rows[$e.RowIndex].Cells[$e.ColumnIndex]
+            if (-not $s.Rows[$e.RowIndex].Selected) {
+                $s.CurrentCell = $s.Rows[$e.RowIndex].Cells[$e.ColumnIndex]
+            }
         }
     })
 
@@ -572,7 +574,7 @@ function Enable-GridCopy {
 }
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "DHCP Tool - New Reservation (v176)"
+$form.Text = "DHCP Tool - New Reservation (v183)"
 $form.Size = New-Object System.Drawing.Size(800, 460) 
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
@@ -856,20 +858,23 @@ $btnImportCsv.Add_Click({
                 }
 
                 $TargetScopeId = $null
-                if ($globalScopeCache[$script:DhcpServers[0]]) {
-                    $exactMatch = $globalScopeCache[$script:DhcpServers[0]] | Where-Object { $_.ScopeId.ToString() -eq $rowIP }
-                    if ($exactMatch) { $TargetScopeId = $exactMatch[0].ScopeId.ToString() } else {
-                        try {
-                            $ipBytes = [System.Net.IPAddress]::Parse($rowIP).GetAddressBytes()
-                            foreach ($s in ($globalScopeCache[$script:DhcpServers[0]])) {
-                                $maskBytes = [System.Net.IPAddress]::Parse($s.SubnetMask).GetAddressBytes()
-                                $scopeBytes = [System.Net.IPAddress]::Parse($s.ScopeId).GetAddressBytes()
-                                $isMatch = $true
-                                for ($i=0; $i -lt 4; $i++) { if (($ipBytes[$i] -band $maskBytes[$i]) -ne $scopeBytes[$i]) { $isMatch = $false; break } }
-                                if ($isMatch) { $TargetScopeId = $s.ScopeId.ToString(); break }
-                            }
-                        } catch {}
+                foreach ($srv in ($script:DhcpServers)) {
+                    if ($globalScopeCache[$srv]) {
+                        $exactMatch = $globalScopeCache[$srv] | Where-Object { $_.ScopeId.ToString() -eq $rowIP }
+                        if ($exactMatch) { $TargetScopeId = $exactMatch[0].ScopeId.ToString() } else {
+                            try {
+                                $ipBytes = [System.Net.IPAddress]::Parse($rowIP).GetAddressBytes()
+                                foreach ($s in ($globalScopeCache[$srv])) {
+                                    $maskBytes = [System.Net.IPAddress]::Parse($s.SubnetMask).GetAddressBytes()
+                                    $scopeBytes = [System.Net.IPAddress]::Parse($s.ScopeId).GetAddressBytes()
+                                    $isMatch = $true
+                                    for ($i=0; $i -lt 4; $i++) { if (($ipBytes[$i] -band $maskBytes[$i]) -ne $scopeBytes[$i]) { $isMatch = $false; break } }
+                                    if ($isMatch) { $TargetScopeId = $s.ScopeId.ToString(); break }
+                                }
+                            } catch {}
+                        }
                     }
+                    if ($TargetScopeId) { break }
                 }
 
                 if ([string]::IsNullOrWhiteSpace($TargetScopeId)) {
@@ -915,7 +920,7 @@ $btnImportCsv.Add_Click({
                     try {
                         $allLeases = Get-DhcpServerv4Lease -ComputerName ($server) -ScopeId ($TargetScopeId) -ErrorAction Stop
                         foreach ($lease in ($allLeases)) {
-                            if ((($lease.ClientId -replace '[^a-fA-F0-9]', '') -eq $rowMAC) -and ($lease.IPAddress -ne $rowIP)) {
+                            if ((($lease.ClientId -replace '[:.-]', '') -eq $rowMAC) -and ($lease.IPAddress -ne $rowIP)) {
                                 $foundConflicts += [PSCustomObject]@{ Server = $server; Type = "Lease"; TargetIP = $lease.IPAddress }
                             }
                         }
@@ -939,18 +944,26 @@ $btnImportCsv.Add_Click({
                 }
 
                 $rowSuccess = 0
+                $successfulNodes = @()
+                $failedNodes = @()
                 foreach ($server in ($ValidServers)) {
                     try {
                         Add-DhcpServerv4Reservation -ComputerName ($server) -ScopeId ($TargetScopeId) -IPAddress ($rowIP) -ClientId ($rowMAC) -Name ($rowName) -Description ($rowDesc) -Type "Dhcp" -ErrorAction Stop
                         $rowSuccess++
-                    } catch {}
+                        $successfulNodes += $server
+                    } catch {
+                        $failedNodes += $server
+                    }
                 }
 
                 if ($rowSuccess -eq $ValidServers.Count) {
-                    $txtImportLog.Text += "[OK] Pushed $rowIP ($rowName)`r`n"
+                    $txtImportLog.Text += "[OK] Pushed $rowIP ($rowName) to: $($successfulNodes -join ', ')`r`n"
+                    $successes++
+                } elseif ($rowSuccess -gt 0) {
+                    $txtImportLog.Text += "[WARN] Partial Push $rowIP ($rowName) to: $($successfulNodes -join ', ') (Failed: $($failedNodes -join ', '))`r`n"
                     $successes++
                 } else {
-                    $txtImportLog.Text += "[ERROR] Server rejection for $rowIP ($rowName)`r`n"
+                    $txtImportLog.Text += "[ERROR] Rejected $rowIP ($rowName) on: $($failedNodes -join ', ')`r`n"
                     $failures++
                 }
 
@@ -1000,6 +1013,17 @@ function Launch-DisplayGrid {
     $txtFilter.Location = New-Object System.Drawing.Point(95, 17)
     $txtFilter.Size = New-Object System.Drawing.Size(320, 35)
     $gridForm.Controls.Add($txtFilter)
+    
+    $ttFilter = New-Object System.Windows.Forms.ToolTip
+    $ttFilter.SetToolTip($txtFilter, "Search multiple items by separating them with commas (e.g., DHCP01, DHCP02).")
+
+    $lblFilterHint = New-Object System.Windows.Forms.Label
+    $lblFilterHint.Text = "*Hint: Separate multiple terms with commas to search them all at once."
+    $lblFilterHint.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Italic)
+    $lblFilterHint.ForeColor = [System.Drawing.Color]::DimGray
+    $lblFilterHint.Location = New-Object System.Drawing.Point(95, 53)
+    $lblFilterHint.Size = New-Object System.Drawing.Size(500, 20)
+    $gridForm.Controls.Add($lblFilterHint)
 
     $cmbCriteria = New-Object System.Windows.Forms.ComboBox
     $cmbCriteria.Font = $gridFont
@@ -1028,8 +1052,8 @@ function Launch-DisplayGrid {
     $gridForm.CancelButton = $btnCloseGrid
 
     $pnlCriteria = New-Object System.Windows.Forms.FlowLayoutPanel
-    $pnlCriteria.Location = New-Object System.Drawing.Point(20, 65)
-    $pnlCriteria.Size = New-Object System.Drawing.Size(1420, 110) 
+    $pnlCriteria.Location = New-Object System.Drawing.Point(20, 70)
+    $pnlCriteria.Size = New-Object System.Drawing.Size(1420, 105) 
     $pnlCriteria.FlowDirection = [System.Windows.Forms.FlowDirection]::TopDown
     $pnlCriteria.WrapContents = $false
     $pnlCriteria.AutoScroll = $true
@@ -1340,60 +1364,246 @@ function Launch-DisplayGrid {
     $miDelete.ForeColor = [System.Drawing.Color]::DarkRed
 
     $miDelete.Add_Click({
-        if (-not $dataGridView.CurrentRow) { return }
-        $row = $dataGridView.CurrentRow
+        if ($dataGridView.SelectedRows.Count -eq 0) { return }
+        $selRows = $dataGridView.SelectedRows
 
-        $entryType   = $row.Cells["Type"].Value
-        $targetIP    = $row.Cells["IPAddress"].Value
-        $targetMAC   = $row.Cells["MACAddress"].Value
-        $targetScope = $row.Cells["ScopeId"].Value
-        $currName    = $row.Cells["Name"].Value
-        $rowServer   = $row.Cells["Server"].Value
+        $delForm = New-Object System.Windows.Forms.Form
+        $delForm.Text = "Bulk Delete Tool"
+        $delForm.Size = New-Object System.Drawing.Size(550, 400)
+        $delForm.StartPosition = "CenterParent"
+        $delForm.FormBorderStyle = "FixedDialog"
+        $delForm.MaximizeBox = $false
+        $delForm.MinimizeBox = $false
+        $delForm.Font = New-Object System.Drawing.Font("Segoe UI", 11)
 
-        if ([string]::IsNullOrWhiteSpace($targetIP) -or $targetIP -eq "—") {
-            [System.Windows.Forms.MessageBox]::Show("Invalid IP address selected.", "Action Blocked", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            return
+        $lblDelDetail = New-Object System.Windows.Forms.Label
+        $lblDelDetail.Text = "You are about to delete $($selRows.Count) selected record(s)."
+        $lblDelDetail.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+        $lblDelDetail.Location = New-Object System.Drawing.Point(20, 15)
+        $lblDelDetail.Size = New-Object System.Drawing.Size(500, 30)
+        $delForm.Controls.Add($lblDelDetail)
+
+        $rbDelAll = New-Object System.Windows.Forms.RadioButton
+        $rbDelAll.Text = "Delete from ALL active servers hosting the scope(s)"
+        $rbDelAll.Location = New-Object System.Drawing.Point(20, 60)
+        $rbDelAll.Size = New-Object System.Drawing.Size(500, 25)
+        $rbDelAll.Checked = $true
+        $delForm.Controls.Add($rbDelAll)
+
+        $rbDelSel = New-Object System.Windows.Forms.RadioButton
+        $rbDelSel.Text = "Delete ONLY from the specific server(s) selected below:"
+        $rbDelSel.Location = New-Object System.Drawing.Point(20, 95)
+        $rbDelSel.Size = New-Object System.Drawing.Size(500, 25)
+        $delForm.Controls.Add($rbDelSel)
+
+        $lbDelSrv = New-Object System.Windows.Forms.ListBox
+        $lbDelSrv.Location = New-Object System.Drawing.Point(40, 130)
+        $lbDelSrv.Size = New-Object System.Drawing.Size(460, 130)
+        $lbDelSrv.SelectionMode = [System.Windows.Forms.SelectionMode]::MultiExtended
+        foreach ($srv in ($targetServersSnapshot)) { 
+            if (-not [string]::IsNullOrWhiteSpace($srv)) { $null = $lbDelSrv.Items.Add($srv) }
         }
+        $delForm.Controls.Add($lbDelSrv)
 
-        $activeServers = if ($targetServersSnapshot.Count -gt 0) { $targetServersSnapshot } else { @($rowServer) }
-        if ($activeServers.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($rowServer)) { $activeServers = @($rowServer) }
+        $btnDelExec = New-Object System.Windows.Forms.Button
+        $btnDelExec.Text = "Delete Records"
+        $btnDelExec.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+        $btnDelExec.ForeColor = [System.Drawing.Color]::DarkRed
+        $btnDelExec.Location = New-Object System.Drawing.Point(200, 290)
+        $btnDelExec.Size = New-Object System.Drawing.Size(180, 40)
+        $delForm.Controls.Add($btnDelExec)
 
-        $ValidServers = @()
-        foreach ($srv in ($activeServers)) {
-            try {
-                $chk = Get-DhcpServerv4Scope -ComputerName ($srv) -ScopeId ($targetScope) -ErrorAction Stop
-                if ($chk) { $ValidServers += $srv }
-            } catch {}
-        }
-        if ($ValidServers.Count -eq 0) { $ValidServers = @($rowServer) }
+        $btnDelCancel = New-Object System.Windows.Forms.Button
+        $btnDelCancel.Text = "Cancel"
+        $btnDelCancel.Location = New-Object System.Drawing.Point(390, 290)
+        $btnDelCancel.Size = New-Object System.Drawing.Size(110, 40)
+        $btnDelCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $delForm.Controls.Add($btnDelCancel)
 
-        $confirmMsg = "Are you sure you want to delete this $entryType entry from active target servers?`n`nName: $currName`nIP: $targetIP`nMAC: $targetMAC`nScope ID: $targetScope"
-        $confirmResult = [System.Windows.Forms.MessageBox]::Show($confirmMsg, "Confirm $entryType Deletion", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        $btnDelExec.Add_Click({
+            if ($rbDelSel.Checked -and $lbDelSrv.SelectedItems.Count -eq 0) {
+                [System.Windows.Forms.MessageBox]::Show("Please select at least one server from the list.", "Error", 0, 48)
+                return
+            }
+            $delForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        })
 
-        if ($confirmResult -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+        $delForm.AcceptButton = $btnDelExec
+        $delForm.CancelButton = $btnDelCancel
+
+        $gridForm.TopMost = $false
+        $dlgRes = $delForm.ShowDialog($gridForm)
+        $gridForm.TopMost = $true
+
+        if ($dlgRes -ne [System.Windows.Forms.DialogResult]::OK) { $delForm.Dispose(); return }
+
+        $isDelAll = $rbDelAll.Checked
+        $selectedDelServers = @()
+        foreach ($item in ($lbDelSrv.SelectedItems)) { $selectedDelServers += $item.ToString() }
+        $delForm.Dispose()
 
         $statusLog = ""
         $successes = 0
+        $affectedScopes = New-Object System.Collections.Generic.HashSet[string]
+        $gridForm.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
 
-        foreach ($server in ($ValidServers)) {
-            try {
-                if ($entryType -eq "Reservation") {
-                    Remove-DhcpServerv4Reservation -ComputerName ($server) -IPAddress ($targetIP) -ErrorAction Stop
-                } else {
-                    Remove-DhcpServerv4Lease -ComputerName ($server) -IPAddress ($targetIP) -ErrorAction Stop
+        $scopeMetadata = @{}
+        foreach ($dr in ($dataTable.Rows)) {
+            $sid = $dr["ScopeId"].ToString()
+            if (-not $scopeMetadata.ContainsKey($sid)) {
+                $scopeMetadata[$sid] = @{
+                    ScopeName = $dr["ScopeName"]
+                    CIDR = $dr["CIDR"]
+                    SubnetMask = $dr["SubnetMask"]
                 }
-                $successes++
-                $statusLog += "• $server : Removed successfully`n"
-            } catch {
-                $statusLog += "• $server : FAILED ($($_.Exception.Message))`n"
             }
         }
 
+        $rowsToRemove = @()
+        foreach ($row in ($selRows)) {
+            $entryType   = $row.Cells["Type"].Value.ToString()
+            $targetIP    = $row.Cells["IPAddress"].Value.ToString()
+            $targetMAC   = $row.Cells["MACAddress"].Value.ToString()
+            $targetScope = $row.Cells["ScopeId"].Value.ToString()
+            $currName    = $row.Cells["Name"].Value.ToString()
+            $rowServer   = $row.Cells["Server"].Value.ToString()
+
+            if ([string]::IsNullOrWhiteSpace($targetIP) -or $targetIP -eq "—") { continue }
+
+            $ValidServers = @()
+            if ($isDelAll) {
+                $activeServers = if ($targetServersSnapshot.Count -gt 0) { $targetServersSnapshot } else { @($rowServer) }
+                if ($activeServers.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($rowServer)) { $activeServers = @($rowServer) }
+                if ($activeServers.Count -eq 0) { $activeServers = $script:DhcpServers }
+
+                foreach ($srv in ($activeServers)) {
+                    try {
+                        $chk = Get-DhcpServerv4Scope -ComputerName ($srv) -ScopeId ($targetScope) -ErrorAction Stop
+                        if ($chk) { $ValidServers += $srv }
+                    } catch {}
+                }
+                if ($ValidServers.Count -eq 0) { $ValidServers = @($rowServer) }
+            } else {
+                $ValidServers = $selectedDelServers
+            }
+
+            $rowDeleted = $false
+            foreach ($server in ($ValidServers)) {
+                try {
+                    if ($entryType -eq "Reservation") {
+                        Remove-DhcpServerv4Reservation -ComputerName ($server) -IPAddress ($targetIP) -ErrorAction Stop
+                    } else {
+                        Remove-DhcpServerv4Lease -ComputerName ($server) -IPAddress ($targetIP) -ErrorAction Stop
+                    }
+                    $rowDeleted = $true
+                    $statusLog += "• $targetIP on $server : Removed`n"
+                } catch {
+                    $statusLog += "• $targetIP on $server : FAILED ($($_.Exception.Message))`n"
+                }
+            }
+
+            if ($rowDeleted) {
+                $successes++
+                $rowsToRemove += $row
+                $null = $affectedScopes.Add($targetScope)
+            }
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+
+        foreach ($r in ($rowsToRemove)) { $dataGridView.Rows.Remove($r) }
+
+        if ($affectedScopes.Count -gt 0) {
+            $statusLog += "`nRescanning $($affectedScopes.Count) affected subnet(s) to update view..."
+            $dataTable.BeginLoadData()
+            
+            foreach ($scopeId in ($affectedScopes)) {
+                $rowsToDelete = @()
+                foreach ($dr in ($dataTable.Rows)) {
+                    if ($dr["ScopeId"].ToString() -eq $scopeId) { $rowsToDelete += $dr }
+                }
+                foreach ($dr in ($rowsToDelete)) { $dataTable.Rows.Remove($dr) }
+
+                $meta = $scopeMetadata[$scopeId]
+                $scanServers = if ($targetServersSnapshot.Count -gt 0) { $targetServersSnapshot } else { $script:DhcpServers }
+
+                foreach ($server in ($scanServers)) {
+                    $ipTracker = New-Object System.Collections.Generic.HashSet[string]
+                    try {
+                        $res = Get-DhcpServerv4Reservation -ComputerName ($server) -ScopeId ($scopeId) -ErrorAction SilentlyContinue
+                        if ($res) {
+                            foreach ($item in ($res)) {
+                                $ipStr = $item.IPAddress.ToString()
+                                $vendor = Get-MacVendor -mac $item.ClientId
+                                $r = $dataTable.NewRow()
+                                $r["Type"]       = "Reservation"
+                                $r["ScopeId"]    = $scopeId
+                                $r["ScopeName"]  = if ($meta.ScopeName) { $meta.ScopeName } else { "—" }
+                                $r["CIDR"]       = if ($meta.CIDR) { $meta.CIDR } else { "" }
+                                $r["SubnetMask"] = if ($meta.SubnetMask) { $meta.SubnetMask } else { "" }
+                                $r["Server"]     = $server
+                                $r["Name"]       = $item.Name
+                                $r["IPAddress"]  = $ipStr
+                                $r["MACAddress"] = Format-MacAddress -mac $item.ClientId
+                                $r["MACAddress_Raw"] = ($item.ClientId -replace '[^a-fA-F0-9]', '').ToUpper()
+                                $r["MACVendor"]  = $vendor
+                                $r["Description"]= $item.Description
+                                $r["PingStatus"] = "Untested"
+                                
+                                if ($ipStr -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["IPAddress_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["IPAddress_Sort"] = $ipStr }
+                                if ($r["SubnetMask"] -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["SubnetMask_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["SubnetMask_Sort"] = $r["SubnetMask"] }
+                                if ($scopeId -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["ScopeId_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["ScopeId_Sort"] = $scopeId }
+
+                                $dataTable.Rows.Add($r)
+                                $null = $ipTracker.Add($ipStr)
+                            }
+                        }
+                    } catch {}
+                    
+                    try {
+                        $leases = Get-DhcpServerv4Lease -ComputerName ($server) -ScopeId ($scopeId) -ErrorAction SilentlyContinue
+                        if ($leases) {
+                            foreach ($lease in ($leases)) {
+                                $ipStr = $lease.IPAddress.ToString()
+                                if ($ipTracker.Contains($ipStr)) { continue }
+
+                                $entryType = if ($lease.AddressState -match "Reservation") { "Reservation" } else { "Lease" }
+                                $vendor = Get-MacVendor -mac $lease.ClientId
+                                $r = $dataTable.NewRow()
+                                $r["Type"]       = $entryType
+                                $r["ScopeId"]    = $scopeId
+                                $r["ScopeName"]  = if ($meta.ScopeName) { $meta.ScopeName } else { "—" }
+                                $r["CIDR"]       = if ($meta.CIDR) { $meta.CIDR } else { "" }
+                                $r["SubnetMask"] = if ($meta.SubnetMask) { $meta.SubnetMask } else { "" }
+                                $r["Server"]     = $server
+                                $r["Name"]       = if ($lease.HostName) { $lease.HostName } else { "—" }
+                                $r["IPAddress"]  = $ipStr
+                                $r["MACAddress"] = Format-MacAddress -mac $lease.ClientId
+                                $r["MACAddress_Raw"] = ($lease.ClientId -replace '[^a-fA-F0-9]', '').ToUpper()
+                                $r["MACVendor"]  = $vendor
+                                $r["Description"]= if ($lease.Description) { $lease.Description } else { "State: $($lease.AddressState)" }
+                                $r["PingStatus"] = "Untested"
+
+                                if ($ipStr -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["IPAddress_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["IPAddress_Sort"] = $ipStr }
+                                if ($r["SubnetMask"] -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["SubnetMask_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["SubnetMask_Sort"] = $r["SubnetMask"] }
+                                if ($scopeId -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["ScopeId_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["ScopeId_Sort"] = $scopeId }
+                                
+                                $dataTable.Rows.Add($r)
+                                $null = $ipTracker.Add($ipStr)
+                            }
+                        }
+                    } catch {}
+                }
+            }
+            $dataTable.EndLoadData()
+        }
+
+        $gridForm.Cursor = [System.Windows.Forms.Cursors]::Default
+
         if ($successes -gt 0) {
-            $dataGridView.Rows.Remove($row)
-            [System.Windows.Forms.MessageBox]::Show("$entryType entry for $targetIP successfully deleted across $successes server(s)!`n`n$statusLog", "Deletion Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            if ($statusLog.Length -gt 1500) { $statusLog = $statusLog.Substring(0, 1500) + "...`n(Log truncated)" }
+            [System.Windows.Forms.MessageBox]::Show("Successfully deleted $successes entry(s) and rescanned the subnet!`n`n$statusLog", "Deletion Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         } else {
-            [System.Windows.Forms.MessageBox]::Show("Failed to delete $entryType on any server target:`n`n$statusLog", "Deletion Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            [System.Windows.Forms.MessageBox]::Show("Failed to delete entries on any server target:`n`n$statusLog", "Deletion Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
     }.GetNewClosure())
 
@@ -2123,6 +2333,9 @@ function Launch-DisplayGrid {
         $rowTextBox = New-Object System.Windows.Forms.TextBox
         $rowTextBox.Font = New-Object System.Drawing.Font("Segoe UI", 11)
         $rowTextBox.Size = New-Object System.Drawing.Size(260, 28)
+        
+        $ttCriteria = New-Object System.Windows.Forms.ToolTip
+        $ttCriteria.SetToolTip($rowTextBox, "Search multiple items by separating them with commas (e.g., value1, value2).")
 
         $btnDelete = New-Object System.Windows.Forms.Button
         $btnDelete.Text = "X"
@@ -2600,7 +2813,6 @@ $btnViewScope.Add_Click({
             $btnScopeCancel.Text = "Cancel"
             $btnScopeCancel.Location = New-Object System.Drawing.Point(400, 260)
             $btnScopeCancel.Size = New-Object System.Drawing.Size(110, 40)
-            $btnScopeCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
             $editScopeForm.Controls.Add($btnScopeCancel)
 
             $editScopeForm.AcceptButton = $btnScopeSave
@@ -2905,7 +3117,7 @@ $btnSettings.Add_Click({
             $aboutForm.Controls.Add($lblTitle)
 
             $lblAuthor = New-Object System.Windows.Forms.Label
-            $lblAuthor.Text = "Created by Paul Kochie`nVersion 176"
+            $lblAuthor.Text = "Created by Paul Kochie`nVersion 183"
             $lblAuthor.Location = New-Object System.Drawing.Point(20, 60)
             $lblAuthor.Size = New-Object System.Drawing.Size(540, 50)
             $aboutForm.Controls.Add($lblAuthor)
@@ -3069,32 +3281,46 @@ $btnAdd.Add_Click({
         }
 
         $ScopeId = $null
-        $scopesList = @()
-        
         foreach ($server in ($script:DhcpServers)) {
-            try { $scopesList = Get-DhcpServerv4Scope -ComputerName ($server) -ErrorAction Stop; if ($scopesList) { break } } catch {}
+            try {
+                $scopesList = Get-DhcpServerv4Scope -ComputerName ($server) -ErrorAction Stop
+                if ($scopesList) {
+                    $exactMatch = $scopesList | Where-Object { $_.ScopeId.ToString() -eq $IP }
+                    if ($exactMatch) { $ScopeId = $exactMatch.ScopeId.ToString() } else {
+                        $ipBytes = [System.Net.IPAddress]::Parse($IP).GetAddressBytes()
+                        foreach ($s in ($scopesList)) {
+                            $maskBytes = [System.Net.IPAddress]::Parse($s.SubnetMask).GetAddressBytes()
+                            $scopeBytes = [System.Net.IPAddress]::Parse($s.ScopeId).GetAddressBytes()
+                            $isMatch = $true
+                            for ($i=0; $i -lt 4; $i++) { if (($ipBytes[$i] -band $maskBytes[$i]) -ne $scopeBytes[$i]) { $isMatch = $false; break } }
+                            if ($isMatch) { $ScopeId = $s.ScopeId.ToString(); break }
+                        }
+                    }
+                }
+            } catch {}
+            if ($ScopeId) { break }
         }
 
-        if (-not $scopesList) {
+        if (-not $ScopeId) {
             Start-Sleep -Milliseconds 1500
             foreach ($server in ($script:DhcpServers)) {
-                try { $scopesList = Get-DhcpServerv4Scope -ComputerName ($server) -ErrorAction Stop; if ($scopesList) { break } } catch {}
-            }
-        }
-
-        if ($scopesList) {
-            $exactMatch = $scopesList | Where-Object { $_.ScopeId.ToString() -eq $IP }
-            if ($exactMatch) { $ScopeId = $exactMatch.ScopeId.ToString() } else {
                 try {
-                    $ipBytes = [System.Net.IPAddress]::Parse($IP).GetAddressBytes()
-                    foreach ($s in ($scopesList)) {
-                        $maskBytes = [System.Net.IPAddress]::Parse($s.SubnetMask).GetAddressBytes()
-                        $scopeBytes = [System.Net.IPAddress]::Parse($s.ScopeId).GetAddressBytes()
-                        $isMatch = $true
-                        for ($i=0; $i -lt 4; $i++) { if (($ipBytes[$i] -band $maskBytes[$i]) -ne $scopeBytes[$i]) { $isMatch = $false; break } }
-                        if ($isMatch) { $ScopeId = $s.ScopeId.ToString(); break }
+                    $scopesList = Get-DhcpServerv4Scope -ComputerName ($server) -ErrorAction Stop
+                    if ($scopesList) {
+                        $exactMatch = $scopesList | Where-Object { $_.ScopeId.ToString() -eq $IP }
+                        if ($exactMatch) { $ScopeId = $exactMatch.ScopeId.ToString() } else {
+                            $ipBytes = [System.Net.IPAddress]::Parse($IP).GetAddressBytes()
+                            foreach ($s in ($scopesList)) {
+                                $maskBytes = [System.Net.IPAddress]::Parse($s.SubnetMask).GetAddressBytes()
+                                $scopeBytes = [System.Net.IPAddress]::Parse($s.ScopeId).GetAddressBytes()
+                                $isMatch = $true
+                                for ($i=0; $i -lt 4; $i++) { if (($ipBytes[$i] -band $maskBytes[$i]) -ne $scopeBytes[$i]) { $isMatch = $false; break } }
+                                if ($isMatch) { $ScopeId = $s.ScopeId.ToString(); break }
+                            }
+                        }
                     }
                 } catch {}
+                if ($ScopeId) { break }
             }
         }
 
@@ -3158,7 +3384,7 @@ $btnAdd.Add_Click({
 
             try {
                 $leaseIP = Get-DhcpServerv4Lease -ComputerName ($server) -IPAddress ($IP) -ErrorAction Stop
-                if ($leaseIP) {$foundConflicts += [PSCustomObject]@{ Server = $server; Type = "Lease"; TargetIP = $leaseIP.IPAddress; Msg = "Existing Active Lease on IP Match (`n   Host: $($leaseIP.HostName) | IP: $($leaseIP.IPAddress) | MAC: $($leaseIP.ClientId) | State: $($leaseIP.AddressState))" } }
+                if ($leaseIP) { $foundConflicts += [PSCustomObject]@{ Server = $server; Type = "Lease"; TargetIP = $leaseIP.IPAddress; Msg = "Existing Active Lease on IP Match (`n   Host: $($leaseIP.HostName) | IP: $($leaseIP.IPAddress) | MAC: $($leaseIP.ClientId) | State: $($leaseIP.AddressState))" } }
             } catch {}
 
             try {
@@ -3173,7 +3399,8 @@ $btnAdd.Add_Click({
             try {
                 $allLeases = Get-DhcpServerv4Lease -ComputerName ($server) -ScopeId ($ScopeId) -ErrorAction Stop
                 foreach ($lease in ($allLeases)) {
-                    if ((($lease.ClientId -replace '[:.-]', '') -eq $MAC) -and ($lease.IPAddress -ne $IP)) {$foundConflicts += [PSCustomObject]@{ Server = $server; Type = "Lease"; TargetIP = $lease.IPAddress; Msg = "Existing Active Lease on MAC Match (`n   Host: $($lease.HostName) | IP: $($lease.IPAddress) | MAC: $($lease.ClientId) | State: $($lease.AddressState))" }
+                    if ((($lease.ClientId -replace '[:.-]', '') -eq $MAC) -and ($lease.IPAddress -ne $IP)) {
+                        $foundConflicts += [PSCustomObject]@{ Server = $server; Type = "Lease"; TargetIP = $lease.IPAddress; Msg = "Existing Active Lease on MAC Match (`n   Host: $($lease.HostName) | IP: $($lease.IPAddress) | MAC: $($lease.ClientId) | State: $($lease.AddressState))" }
                     }
                 }
             } catch {}
@@ -3208,14 +3435,15 @@ $btnAdd.Add_Click({
             }
         }
 
-        if ($SuccessCount -eq $ValidServers.Count) {$null = [System.Windows.Forms.MessageBox]::Show("Reservation successfully configured on all target systems!`n`n$StatusReport", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            $txtName.Clear(); $txtIP.Clear();$txtMAC.Clear(); $txtDesc.Clear();$txtName.Focus()
+        if ($SuccessCount -eq $ValidServers.Count) {
+            $null = [System.Windows.Forms.MessageBox]::Show("Reservation successfully configured on all target systems!`n`n$StatusReport", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            $txtName.Clear(); $txtIP.Clear(); $txtMAC.Clear(); $txtDesc.Clear(); $txtName.Focus()
         } else {
             $null = [System.Windows.Forms.MessageBox]::Show("One or more server targets encountered configuration issues during push operation:`n`n$StatusReport", "Deployment Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
         }
     } finally {
-        $btnAdd.Enabled =$true
+        $btnAdd.Enabled = $true
     }
 })
 
-$null =$form.ShowDialog()
+$null = $form.ShowDialog()

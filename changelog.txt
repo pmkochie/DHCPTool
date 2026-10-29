@@ -1,3 +1,10 @@
+v183 - Fixed an issue where right-clicking to open the context menu would aggressively clear multi-row selections in the DataGridView. Right-clicking an already-selected row now safely preserves the bulk selection block.
+v182 - Upgraded Bulk CSV Import logging to dynamically display the specific target server(s) receiving each reservation for better auditability.
+v181 - Hardened the UI ListBox memory extraction array during targeted deletions to physically sever the data pointer from the Form disposal process, ensuring flawless single-server targeting before Windows Failover replication takes over.
+v180 - Replaced the standard deletion confirmation with a custom Bulk Delete dialog, allowing users to choose between deleting records globally across all synchronized scopes or targeting specific selected servers only.
+v179 - Overhauled the Delete engine to support bulk multi-row selection. Integrated a safe, synchronous subnet rescan that automatically repopulates the grid with live lease data immediately after a deletion to guarantee accurate results.
+v178 - Updated scope discovery logic in both CSV Import and Single Add to query all servers in the target list rather than exclusively relying on the primary node.
+v177 - Added UI static hints and hover tooltips to expose the comma-separated multiple item search feature.
 v176 - Refactored all helper scriptblocks to native functions to eliminate pipeline '&' closure crashes. Wrapped all loop collections and parameters in parentheses to physically prevent clipboard space-stripping errors.
 v175 - Pulling from Changelog.txt instead of including it as part of the PowerShell file.
 v174 - Permanently resolved the pipeline crash on context actions by completely deleting the orphaned $RefreshScopeInGrid references.

@@ -1,9 +1,9 @@
 ﻿<#
 .SYNOPSIS
-    DHCP Reservation & Lease Manager (v183 - Multi-Select Context Fix).
+    DHCP Reservation & Lease Manager (v184 - Universal Subnet Rescan).
 .DESCRIPTION
     Creates DHCP reservations and views full lease/reservation tables across target DHCP servers.
-    V183: Fixed an issue where right-clicking to open the context menu would aggressively clear multi-row selections in the DataGridView. Right-clicking an already-selected row now safely preserves the bulk selection block.
+    V184: Added a "Refresh View" button and a right-click "Refresh Subnet" option. Automated the subnet rescan engine to trigger after Edit, Convert, and Migrate actions so cross-server failover syncs are immediately visible in the grid.
 #>
 
 param([switch]$Authenticated)
@@ -19,7 +19,7 @@ $gridFont = New-Object System.Drawing.Font("Segoe UI", 12)
 
 if (-not $Authenticated) {
     $loginForm = New-Object System.Windows.Forms.Form
-    $loginForm.Text = "DHCP Tool (v183) — AD Admin Login"
+    $loginForm.Text = "DHCP Tool (v184) — AD Admin Login"
     $loginForm.Size = New-Object System.Drawing.Size(640, 320)
     $loginForm.StartPosition = "CenterScreen"
     $loginForm.FormBorderStyle = "FixedDialog"
@@ -574,7 +574,7 @@ function Enable-GridCopy {
 }
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "DHCP Tool - New Reservation (v183)"
+$form.Text = "DHCP Tool - New Reservation (v184)"
 $form.Size = New-Object System.Drawing.Size(800, 460) 
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
@@ -1027,25 +1027,32 @@ function Launch-DisplayGrid {
 
     $cmbCriteria = New-Object System.Windows.Forms.ComboBox
     $cmbCriteria.Font = $gridFont
-    $cmbCriteria.Location = New-Object System.Drawing.Point(435, 17)
-    $cmbCriteria.Size = New-Object System.Drawing.Size(200, 35)
+    $cmbCriteria.Location = New-Object System.Drawing.Point(425, 17)
+    $cmbCriteria.Size = New-Object System.Drawing.Size(180, 35)
     $cmbCriteria.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
     $null = $cmbCriteria.Items.AddRange(@("Add criteria", "Type", "ScopeId", "ScopeName", "CIDR", "SubnetMask", "Server", "Name", "IPAddress", "MACAddress", "MACVendor", "Description", "PingStatus"))
     $cmbCriteria.SelectedIndex = 0
     $gridForm.Controls.Add($cmbCriteria)
 
+    $btnRefreshGrid = New-Object System.Windows.Forms.Button
+    $btnRefreshGrid.Text = "Refresh View"
+    $btnRefreshGrid.Font = $gridFont
+    $btnRefreshGrid.Location = New-Object System.Drawing.Point(615, 16)
+    $btnRefreshGrid.Size = New-Object System.Drawing.Size(120, 36)
+    $gridForm.Controls.Add($btnRefreshGrid)
+
     $btnClearAll = New-Object System.Windows.Forms.Button
     $btnClearAll.Text = "Clear All"
     $btnClearAll.Font = $gridFont
-    $btnClearAll.Location = New-Object System.Drawing.Point(650, 16)
-    $btnClearAll.Size = New-Object System.Drawing.Size(110, 36)
+    $btnClearAll.Location = New-Object System.Drawing.Point(745, 16)
+    $btnClearAll.Size = New-Object System.Drawing.Size(100, 36)
     $gridForm.Controls.Add($btnClearAll)
 
     $btnCloseGrid = New-Object System.Windows.Forms.Button
     $btnCloseGrid.Text = "Close"
     $btnCloseGrid.Font = $gridFont
-    $btnCloseGrid.Location = New-Object System.Drawing.Point(770, 16)
-    $btnCloseGrid.Size = New-Object System.Drawing.Size(110, 36)
+    $btnCloseGrid.Location = New-Object System.Drawing.Point(855, 16)
+    $btnCloseGrid.Size = New-Object System.Drawing.Size(100, 36)
     $btnCloseGrid.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $gridForm.Controls.Add($btnCloseGrid)
     
@@ -1212,6 +1219,124 @@ function Launch-DisplayGrid {
     $null = $dataTable.Columns.Add("Description") 
     $null = $dataTable.Columns.Add("PingStatus") 
 
+    $RescanSubnets = {
+        param($ScopesToScan)
+        $gridForm.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+        $dataTable.BeginLoadData()
+        
+        $scopeMetadata = @{}
+        foreach ($dr in ($dataTable.Rows)) {
+            $sid = $dr["ScopeId"].ToString()
+            if (-not $scopeMetadata.ContainsKey($sid)) {
+                $scopeMetadata[$sid] = @{
+                    ScopeName = $dr["ScopeName"]
+                    CIDR = $dr["CIDR"]
+                    SubnetMask = $dr["SubnetMask"]
+                }
+            }
+        }
+
+        foreach ($scopeId in ($ScopesToScan)) {
+            $rowsToDelete = @()
+            foreach ($dr in ($dataTable.Rows)) {
+                if ($dr["ScopeId"].ToString() -eq $scopeId) { $rowsToDelete += $dr }
+            }
+            foreach ($dr in ($rowsToDelete)) { $dataTable.Rows.Remove($dr) }
+
+            $meta = $scopeMetadata[$scopeId]
+            $scanServers = if ($targetServersSnapshot.Count -gt 0) { $targetServersSnapshot } else { $script:DhcpServers }
+
+            foreach ($server in ($scanServers)) {
+                $ipTracker = New-Object System.Collections.Generic.HashSet[string]
+                try {
+                    $res = Get-DhcpServerv4Reservation -ComputerName ($server) -ScopeId ($scopeId) -ErrorAction SilentlyContinue
+                    if ($res) {
+                        foreach ($item in ($res)) {
+                            $ipStr = $item.IPAddress.ToString()
+                            $vendor = Get-MacVendor -mac $item.ClientId
+                            $r = $dataTable.NewRow()
+                            $r["Type"]       = "Reservation"
+                            $r["ScopeId"]    = $scopeId
+                            $r["ScopeName"]  = if ($meta.ScopeName) { $meta.ScopeName } else { "—" }
+                            $r["CIDR"]       = if ($meta.CIDR) { $meta.CIDR } else { "" }
+                            $r["SubnetMask"] = if ($meta.SubnetMask) { $meta.SubnetMask } else { "" }
+                            $r["Server"]     = $server
+                            $r["Name"]       = $item.Name
+                            $r["IPAddress"]  = $ipStr
+                            $r["MACAddress"] = Format-MacAddress -mac $item.ClientId
+                            $r["MACAddress_Raw"] = ($item.ClientId -replace '[^a-fA-F0-9]', '').ToUpper()
+                            $r["MACVendor"]  = $vendor
+                            $r["Description"]= $item.Description
+                            $r["PingStatus"] = "Untested"
+                            
+                            if ($ipStr -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["IPAddress_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["IPAddress_Sort"] = $ipStr }
+                            if ($r["SubnetMask"] -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["SubnetMask_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["SubnetMask_Sort"] = $r["SubnetMask"] }
+                            if ($scopeId -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["ScopeId_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["ScopeId_Sort"] = $scopeId }
+
+                            $dataTable.Rows.Add($r)
+                            $null = $ipTracker.Add($ipStr)
+                        }
+                    }
+                } catch {}
+                
+                try {
+                    $leases = Get-DhcpServerv4Lease -ComputerName ($server) -ScopeId ($scopeId) -ErrorAction SilentlyContinue
+                    if ($leases) {
+                        foreach ($lease in ($leases)) {
+                            $ipStr = $lease.IPAddress.ToString()
+                            if ($ipTracker.Contains($ipStr)) { continue }
+
+                            $entryType = if ($lease.AddressState -match "Reservation") { "Reservation" } else { "Lease" }
+                            $vendor = Get-MacVendor -mac $lease.ClientId
+                            $r = $dataTable.NewRow()
+                            $r["Type"]       = $entryType
+                            $r["ScopeId"]    = $scopeId
+                            $r["ScopeName"]  = if ($meta.ScopeName) { $meta.ScopeName } else { "—" }
+                            $r["CIDR"]       = if ($meta.CIDR) { $meta.CIDR } else { "" }
+                            $r["SubnetMask"] = if ($meta.SubnetMask) { $meta.SubnetMask } else { "" }
+                            $r["Server"]     = $server
+                            $r["Name"]       = if ($lease.HostName) { $lease.HostName } else { "—" }
+                            $r["IPAddress"]  = $ipStr
+                            $r["MACAddress"] = Format-MacAddress -mac $lease.ClientId
+                            $r["MACAddress_Raw"] = ($lease.ClientId -replace '[^a-fA-F0-9]', '').ToUpper()
+                            $r["MACVendor"]  = $vendor
+                            $r["Description"]= if ($lease.Description) { $lease.Description } else { "State: $($lease.AddressState)" }
+                            $r["PingStatus"] = "Untested"
+
+                            if ($ipStr -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["IPAddress_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["IPAddress_Sort"] = $ipStr }
+                            if ($r["SubnetMask"] -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["SubnetMask_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["SubnetMask_Sort"] = $r["SubnetMask"] }
+                            if ($scopeId -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["ScopeId_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["ScopeId_Sort"] = $scopeId }
+                            
+                            $dataTable.Rows.Add($r)
+                            $null = $ipTracker.Add($ipStr)
+                        }
+                    }
+                } catch {}
+            }
+        }
+        $dataTable.EndLoadData()
+        $gridForm.Cursor = [System.Windows.Forms.Cursors]::Default
+    }.GetNewClosure()
+
+    $btnRefreshGrid.Add_Click({
+        $btnRefreshGrid.Enabled = $false
+        try {
+            if (-not [string]::IsNullOrWhiteSpace($TargetScopeId)) {
+                & $RescanSubnets -ScopesToScan @($TargetScopeId)
+            } else {
+                $confirm = [System.Windows.Forms.MessageBox]::Show("You are currently in a Global Search view. Refreshing will clear the grid and re-query all scopes across all servers from scratch. This may take a minute.`n`nDo you want to continue?", "Confirm Global Refresh", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+                if ($confirm -eq [System.Windows.Forms.DialogResult]::Yes) {
+                    $dataTable.Clear()
+                    if ($LiveLoadBlock) {
+                        & $LiveLoadBlock $dataTable $gridForm
+                    }
+                }
+            }
+        } finally {
+            $btnRefreshGrid.Enabled = $true
+        }
+    }.GetNewClosure())
+
     $miConvertSep = New-Object System.Windows.Forms.ToolStripSeparator
     $null = $dataGridView.ContextMenuStrip.Items.Add($miConvertSep)
 
@@ -1346,9 +1471,8 @@ function Launch-DisplayGrid {
             }
 
             if ($successes -gt 0) {
-                $row.Cells["Type"].Value = "Reservation"
-                $row.Cells["Name"].Value = $newName
-                $row.Cells["Description"].Value = $newDesc
+                $statusLog += "`nRescanning subnet to update view..."
+                & $RescanSubnets -ScopesToScan @($targetScope)
                 [System.Windows.Forms.MessageBox]::Show("Lease successfully converted to Reservation across $successes server(s)!`n`n$statusLog", "Conversion Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             } else {
                 [System.Windows.Forms.MessageBox]::Show("Failed to convert lease on any server target:`n`n$statusLog", "Conversion Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
@@ -1447,19 +1571,6 @@ function Launch-DisplayGrid {
         $affectedScopes = New-Object System.Collections.Generic.HashSet[string]
         $gridForm.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
 
-        $scopeMetadata = @{}
-        foreach ($dr in ($dataTable.Rows)) {
-            $sid = $dr["ScopeId"].ToString()
-            if (-not $scopeMetadata.ContainsKey($sid)) {
-                $scopeMetadata[$sid] = @{
-                    ScopeName = $dr["ScopeName"]
-                    CIDR = $dr["CIDR"]
-                    SubnetMask = $dr["SubnetMask"]
-                }
-            }
-        }
-
-        $rowsToRemove = @()
         foreach ($row in ($selRows)) {
             $entryType   = $row.Cells["Type"].Value.ToString()
             $targetIP    = $row.Cells["IPAddress"].Value.ToString()
@@ -1504,100 +1615,15 @@ function Launch-DisplayGrid {
 
             if ($rowDeleted) {
                 $successes++
-                $rowsToRemove += $row
                 $null = $affectedScopes.Add($targetScope)
             }
             [System.Windows.Forms.Application]::DoEvents()
         }
 
-        foreach ($r in ($rowsToRemove)) { $dataGridView.Rows.Remove($r) }
-
         if ($affectedScopes.Count -gt 0) {
             $statusLog += "`nRescanning $($affectedScopes.Count) affected subnet(s) to update view..."
-            $dataTable.BeginLoadData()
-            
-            foreach ($scopeId in ($affectedScopes)) {
-                $rowsToDelete = @()
-                foreach ($dr in ($dataTable.Rows)) {
-                    if ($dr["ScopeId"].ToString() -eq $scopeId) { $rowsToDelete += $dr }
-                }
-                foreach ($dr in ($rowsToDelete)) { $dataTable.Rows.Remove($dr) }
-
-                $meta = $scopeMetadata[$scopeId]
-                $scanServers = if ($targetServersSnapshot.Count -gt 0) { $targetServersSnapshot } else { $script:DhcpServers }
-
-                foreach ($server in ($scanServers)) {
-                    $ipTracker = New-Object System.Collections.Generic.HashSet[string]
-                    try {
-                        $res = Get-DhcpServerv4Reservation -ComputerName ($server) -ScopeId ($scopeId) -ErrorAction SilentlyContinue
-                        if ($res) {
-                            foreach ($item in ($res)) {
-                                $ipStr = $item.IPAddress.ToString()
-                                $vendor = Get-MacVendor -mac $item.ClientId
-                                $r = $dataTable.NewRow()
-                                $r["Type"]       = "Reservation"
-                                $r["ScopeId"]    = $scopeId
-                                $r["ScopeName"]  = if ($meta.ScopeName) { $meta.ScopeName } else { "—" }
-                                $r["CIDR"]       = if ($meta.CIDR) { $meta.CIDR } else { "" }
-                                $r["SubnetMask"] = if ($meta.SubnetMask) { $meta.SubnetMask } else { "" }
-                                $r["Server"]     = $server
-                                $r["Name"]       = $item.Name
-                                $r["IPAddress"]  = $ipStr
-                                $r["MACAddress"] = Format-MacAddress -mac $item.ClientId
-                                $r["MACAddress_Raw"] = ($item.ClientId -replace '[^a-fA-F0-9]', '').ToUpper()
-                                $r["MACVendor"]  = $vendor
-                                $r["Description"]= $item.Description
-                                $r["PingStatus"] = "Untested"
-                                
-                                if ($ipStr -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["IPAddress_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["IPAddress_Sort"] = $ipStr }
-                                if ($r["SubnetMask"] -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["SubnetMask_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["SubnetMask_Sort"] = $r["SubnetMask"] }
-                                if ($scopeId -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["ScopeId_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["ScopeId_Sort"] = $scopeId }
-
-                                $dataTable.Rows.Add($r)
-                                $null = $ipTracker.Add($ipStr)
-                            }
-                        }
-                    } catch {}
-                    
-                    try {
-                        $leases = Get-DhcpServerv4Lease -ComputerName ($server) -ScopeId ($scopeId) -ErrorAction SilentlyContinue
-                        if ($leases) {
-                            foreach ($lease in ($leases)) {
-                                $ipStr = $lease.IPAddress.ToString()
-                                if ($ipTracker.Contains($ipStr)) { continue }
-
-                                $entryType = if ($lease.AddressState -match "Reservation") { "Reservation" } else { "Lease" }
-                                $vendor = Get-MacVendor -mac $lease.ClientId
-                                $r = $dataTable.NewRow()
-                                $r["Type"]       = $entryType
-                                $r["ScopeId"]    = $scopeId
-                                $r["ScopeName"]  = if ($meta.ScopeName) { $meta.ScopeName } else { "—" }
-                                $r["CIDR"]       = if ($meta.CIDR) { $meta.CIDR } else { "" }
-                                $r["SubnetMask"] = if ($meta.SubnetMask) { $meta.SubnetMask } else { "" }
-                                $r["Server"]     = $server
-                                $r["Name"]       = if ($lease.HostName) { $lease.HostName } else { "—" }
-                                $r["IPAddress"]  = $ipStr
-                                $r["MACAddress"] = Format-MacAddress -mac $lease.ClientId
-                                $r["MACAddress_Raw"] = ($lease.ClientId -replace '[^a-fA-F0-9]', '').ToUpper()
-                                $r["MACVendor"]  = $vendor
-                                $r["Description"]= if ($lease.Description) { $lease.Description } else { "State: $($lease.AddressState)" }
-                                $r["PingStatus"] = "Untested"
-
-                                if ($ipStr -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["IPAddress_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["IPAddress_Sort"] = $ipStr }
-                                if ($r["SubnetMask"] -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["SubnetMask_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["SubnetMask_Sort"] = $r["SubnetMask"] }
-                                if ($scopeId -match "^(\d+)\.(\d+)\.(\d+)\.(\d+)$") { $r["ScopeId_Sort"] = "{0:D3}.{1:D3}.{2:D3}.{3:D3}" -f [int]$Matches[1], [int]$Matches[2], [int]$Matches[3], [int]$Matches[4] } else { $r["ScopeId_Sort"] = $scopeId }
-                                
-                                $dataTable.Rows.Add($r)
-                                $null = $ipTracker.Add($ipStr)
-                            }
-                        }
-                    } catch {}
-                }
-            }
-            $dataTable.EndLoadData()
+            & $RescanSubnets -ScopesToScan $affectedScopes
         }
-
-        $gridForm.Cursor = [System.Windows.Forms.Cursors]::Default
 
         if ($successes -gt 0) {
             if ($statusLog.Length -gt 1500) { $statusLog = $statusLog.Substring(0, 1500) + "...`n(Log truncated)" }
@@ -1746,7 +1772,7 @@ function Launch-DisplayGrid {
 
                 $migSuccess = 0
                 $migFail = 0
-                $rowsToRemove = @()
+                $affectedScopes = New-Object System.Collections.Generic.HashSet[string]
 
                 foreach ($r in ($selRows)) {
                     $oldIP = $r.Cells["IPAddress"].Value.ToString()
@@ -1770,11 +1796,12 @@ function Launch-DisplayGrid {
 
                     if ($pushedAny) {
                         $migSuccess++
+                        $null = $affectedScopes.Add($targetScope)
                         if ($isMove) {
                             try {
                                 if ($entryType -eq "Reservation") { Remove-DhcpServerv4Reservation -ComputerName ($oldServer) -IPAddress ($oldIP) -ErrorAction Stop }
                                 else { Remove-DhcpServerv4Lease -ComputerName ($oldServer) -IPAddress ($oldIP) -ErrorAction Stop }
-                                $rowsToRemove += $r
+                                $null = $affectedScopes.Add($oldScope)
                             } catch {}
                         }
                     } else {
@@ -1782,7 +1809,9 @@ function Launch-DisplayGrid {
                     }
                 }
                 
-                foreach ($rr in ($rowsToRemove)) { $dataGridView.Rows.Remove($rr) }
+                if ($affectedScopes.Count -gt 0) {
+                    & $RescanSubnets -ScopesToScan $affectedScopes
+                }
 
                 $migForm.Cursor = [System.Windows.Forms.Cursors]::Default
                 [System.Windows.Forms.MessageBox]::Show("Migration Complete.`nSuccessful: $migSuccess`nFailed: $migFail", "Complete", 0, 64)
@@ -1803,6 +1832,19 @@ function Launch-DisplayGrid {
     }.GetNewClosure())
 
     $null = $dataGridView.ContextMenuStrip.Items.Add($miMigrate)
+
+    $miRefresh = New-Object System.Windows.Forms.ToolStripMenuItem "Refresh Subnet (Rescan)"
+    $miRefresh.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+    $miRefresh.Add_Click({
+        if ($dataGridView.SelectedRows.Count -eq 0) { return }
+        $scopesToRefresh = New-Object System.Collections.Generic.HashSet[string]
+        foreach ($r in $dataGridView.SelectedRows) {
+            $null = $scopesToRefresh.Add($r.Cells["ScopeId"].Value.ToString())
+        }
+        & $RescanSubnets -ScopesToScan $scopesToRefresh
+    }.GetNewClosure())
+    
+    $null = $dataGridView.ContextMenuStrip.Items.Add($miRefresh)
     $null = $dataGridView.ContextMenuStrip.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 
     $miEdit = New-Object System.Windows.Forms.ToolStripMenuItem "Edit Reservation"
@@ -1952,11 +1994,8 @@ function Launch-DisplayGrid {
             }
 
             if ($successes -gt 0) {
-                $row.Cells["Name"].Value = $newName
-                $row.Cells["MACAddress"].Value = Format-MacAddress -mac $cleanMAC
-                $row.Cells["MACAddress_Raw"].Value = $cleanMAC.ToUpper()
-                $row.Cells["MACVendor"].Value = Get-MacVendor -mac $cleanMAC
-                $row.Cells["Description"].Value = $newDesc
+                $statusLog += "`nRescanning subnet to update view..."
+                & $RescanSubnets -ScopesToScan @($targetScope)
                 [System.Windows.Forms.MessageBox]::Show("Reservation successfully updated across $successes server(s)!`n`n$statusLog", "Update Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             } else {
                 [System.Windows.Forms.MessageBox]::Show("Failed to update reservation on any server target:`n`n$statusLog", "Update Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
@@ -3117,7 +3156,7 @@ $btnSettings.Add_Click({
             $aboutForm.Controls.Add($lblTitle)
 
             $lblAuthor = New-Object System.Windows.Forms.Label
-            $lblAuthor.Text = "Created by Paul Kochie`nVersion 183"
+            $lblAuthor.Text = "Created by Paul Kochie`nVersion 184"
             $lblAuthor.Location = New-Object System.Drawing.Point(20, 60)
             $lblAuthor.Size = New-Object System.Drawing.Size(540, 50)
             $aboutForm.Controls.Add($lblAuthor)

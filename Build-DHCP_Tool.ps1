@@ -2,6 +2,7 @@
 $WorkspaceDir  = "C:\Scripts\dhcp\DHCPTool"
 $CsvFile       = "$WorkspaceDir\oui_trimmed.csv"
 $LogFile       = "$WorkspaceDir\changelog.txt"
+$CertPath      = "C:\Scripts\certs\CodeSigning.pfx" # Update with your exact certificate filename
 
 Clear-Host
 Write-Host "========================================" -ForegroundColor Cyan
@@ -27,12 +28,12 @@ if (-not $SourceFile) {
     return
 }
 
-$TemplatePath =$SourceFile.FullName
+$TemplatePath = $SourceFile.FullName
 Write-Host "[*] Found latest script: $($SourceFile.Name)" -ForegroundColor Green
 
 # 3. Extract Version Number via Regex
 if ($SourceFile.Name -match 'Set DHCP Reservation(\d+)') {
-    $Version =$Matches[1]
+    $Version = $Matches[1]
     Write-Host "[*] Extracted Version: $Version" -ForegroundColor Green
 } else {
     Write-Host "[ERROR] Could not extract version number from filename: $($SourceFile.Name)" -ForegroundColor Red
@@ -44,7 +45,7 @@ $InjectedScript = Get-Content "$TemplatePath" -Raw
 # 4. Inject OUI CSV into Script Memory dynamically
 Write-Host "[*] Injecting OUI Database ($CsvFile)..." -ForegroundColor Yellow
 if (-not (Test-Path "$CsvFile")) {
-    Write-Host "[ERROR] Could not find $CsvFile in$WorkspaceDir. Please ensure it is in the same folder." -ForegroundColor Red
+    Write-Host "[ERROR] Could not find $CsvFile in $WorkspaceDir. Please ensure it is in the same folder." -ForegroundColor Red
     return
 }
 $RawCsv = Get-Content "$CsvFile" -Raw
@@ -58,7 +59,7 @@ if (Test-Path "$LogFile") {
     Write-Host "[*] Changelog injected successfully." -ForegroundColor Green
 } else {
     Write-Host "[!] Could not find $LogFile. About window will load empty." -ForegroundColor Yellow
-    $InjectedScript =$InjectedScript.Replace('# <INSERT_CHANGELOG_HERE>', "Changelog file not found during compilation.")
+    $InjectedScript = $InjectedScript.Replace('# <INSERT_CHANGELOG_HERE>', "Changelog file not found during compilation.")
 }
 
 # Save temporary injected script
@@ -88,16 +89,33 @@ try {
     
     # 7. Digital Signature / Authenticode Engine
     Write-Host "[*] Checking for Code Signing Certificate..." -ForegroundColor Yellow
-    
-    # Look for a specific publisher cert first, or fallback to any available code signing cert
-    $Cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert -ErrorAction SilentlyContinue | Where-Object { $_.Subject -match "DHCP Tool Publisher" } | Select-Object -First 1
-    if (-not $Cert) {
-        $Cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert -ErrorAction SilentlyContinue | Select-Object -First 1
+    $Cert = $null
+
+    if (Test-Path $CertPath) {
+        Write-Host "    [*] Found external certificate at $CertPath." -ForegroundColor Green
+        try {
+            # This will securely prompt you for the PFX password
+            $Cert = Get-PfxCertificate -FilePath $CertPath -ErrorAction Stop
+        } catch {
+            Write-Host "    [!] Failed to load external certificate: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "    [i] External certificate not found at $CertPath." -ForegroundColor Gray
     }
 
+    # Fallback to local store if external cert fails
     if (-not $Cert) {
-        Write-Host "    [!] No Code Signing certificate found. Generating a self-signed certificate..." -ForegroundColor Yellow
-        $Cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=DHCP Tool Publisher" -CertStoreLocation Cert:\CurrentUser\My -ErrorAction Stop
+        Write-Host "    [*] Checking local certificate store for existing publisher certificates..." -ForegroundColor Yellow
+        $Cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert -ErrorAction SilentlyContinue | Where-Object { $_.Subject -match "DHCP Tool Publisher" } | Select-Object -First 1
+        
+        if (-not $Cert) {
+            $Cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+
+        if (-not $Cert) {
+            Write-Host "    [!] No Code Signing certificate found. Generating a self-signed backup certificate..." -ForegroundColor Yellow
+            $Cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=DHCP Tool Publisher" -CertStoreLocation Cert:\CurrentUser\My -ErrorAction Stop
+        }
     }
 
     Write-Host "    [*] Applying Digital Signature using: $($Cert.Subject)" -ForegroundColor Yellow

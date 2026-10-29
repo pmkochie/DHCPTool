@@ -1,3 +1,4 @@
+v184 - Added a "Refresh View" button and a right-click "Refresh Subnet" option. Automated the subnet rescan engine to trigger after Edit, Convert, and Migrate actions so cross-server failover syncs are immediately visible in the grid.
 v183 - Fixed an issue where right-clicking to open the context menu would aggressively clear multi-row selections in the DataGridView. Right-clicking an already-selected row now safely preserves the bulk selection block.
 v182 - Upgraded Bulk CSV Import logging to dynamically display the specific target server(s) receiving each reservation for better auditability.
 v181 - Hardened the UI ListBox memory extraction array during targeted deletions to physically sever the data pointer from the Form disposal process, ensuring flawless single-server targeting before Windows Failover replication takes over.
